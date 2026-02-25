@@ -1,10 +1,9 @@
+import os
 from typing import Callable, Awaitable
 from session.state import SessionState, ImageArtifact
-from clients.nano_banana import NanaBananaClient
-from clients.kling_ai import KlingAIClient
+from clients.kie_ai import KieAIClient
 
-nano_banana = NanaBananaClient()
-kling_ai = KlingAIClient()
+kie_ai = KieAIClient(api_key=os.getenv("KIE_API_KEY", ""))
 
 WsSend = Callable[[dict], Awaitable[None]]
 
@@ -15,7 +14,7 @@ async def handle_tool_call(
     state: SessionState,
     ws_send: WsSend,
 ) -> str:
-    """Execute a tool call and return a result string for Claude."""
+    """Execute a tool call and return a result string for the model."""
 
     if tool_name == "update_script":
         state.script = tool_input["script"]
@@ -47,7 +46,7 @@ async def handle_tool_call(
         })
 
         try:
-            result = await nano_banana.generate(img.prompt)
+            result = await kie_ai.generate_image(img.prompt)
             img.url = result["url"]
             img.task_id = result.get("task_id")
             await ws_send({
@@ -70,8 +69,9 @@ async def handle_tool_call(
         })
 
         try:
-            result = await kling_ai.generate(
-                prompt=tool_input["script"],
+            result = await kie_ai.generate_video(
+                prompt=tool_input["prompt"],
+                image_url=tool_input["image_url"],
                 duration=tool_input["duration"],
             )
             state.video_url = result["video_url"]
