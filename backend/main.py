@@ -1,12 +1,14 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 load_dotenv()
 
-from api.routes import router as http_router
-from api.websocket import router as ws_router
+from api.routes import router as http_router  # noqa: E402
+from api.websocket import router as ws_router  # noqa: E402
 
 
 @asynccontextmanager

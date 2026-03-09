@@ -1,18 +1,20 @@
 import json
+import logging
 import os
 from typing import Callable, Awaitable
 
-from openai import AsyncOpenAI
+import httpx
 
 from session.state import SessionState
 from agent.tools import TOOLS
 from agent.system_prompt import SYSTEM_PROMPT
 from agent.tool_handlers import handle_tool_call
 
-client = AsyncOpenAI(
-    api_key=os.getenv("KIE_API_KEY"),
-    base_url="https://api.kie.ai/gemini-2.5-flash/v1",
-)
+logger = logging.getLogger(__name__)
+
+KIE_BASE_URL = "https://api.kie.ai/gemini-2.5-flash/v1"
+KIE_API_KEY = os.getenv("KIE_API_KEY", "")
+
 
 WsSend = Callable[[dict], Awaitable[None]]
 
@@ -32,7 +34,7 @@ def _build_system(state: SessionState) -> str:
 def _build_messages(state: SessionState) -> list[dict]:
     """Build the messages list with the dynamic system prompt."""
     return [
-        {"role": "developer", "content": _build_system(state)},
+        {"role": "system", "content": _build_system(state)},
         *state.messages,
     ]
 
@@ -51,54 +53,104 @@ async def run_agent_turn(
     state.messages.append({"role": "user", "content": user_message})
 
     while True:
-        # Stream the response
-        stream = await client.chat.completions.create(
-            model="gemini-2.5-flash",
-            max_tokens=4096,
-            stream=True,
-            messages=_build_messages(state),
-            tools=TOOLS,
-        )
+        messages = _build_messages(state)
+        logger.info("Calling kie.ai Gemini API (messages=%d)", len(messages))
 
-        # Accumulate the full response from streamed chunks
+        # Raw httpx call so we can inspect the actual response from kie.ai
+        payload = {
+            "model": "gemini-2.5-flash",
+            "max_tokens": 4096,
+            "stream": True,
+            "messages": messages,
+            "tools": TOOLS,
+        }
         text_content = ""
         tool_calls_by_index: dict[int, dict] = {}
         finish_reason = None
+        chunk_count = 0
 
-        async for chunk in stream:
-            choice = chunk.choices[0] if chunk.choices else None
-            if not choice:
-                continue
+        logger.info(
+            "Sending payload: model=%s, stream=%s, tools=%s, message_roles=%s",
+            payload["model"],
+            payload["stream"],
+            [t["function"]["name"] for t in payload["tools"]],
+            [m["role"] for m in payload["messages"]],
+        )
 
-            delta = choice.delta
-            finish_reason = choice.finish_reason or finish_reason
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
+            async with http.stream(
+                "POST",
+                f"{KIE_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {KIE_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            ) as resp:
+                logger.info("kie.ai response: status=%d content_type=%s", resp.status_code, resp.headers.get("content-type", ""))
 
-            # Stream text tokens to frontend
-            if delta and delta.content:
-                text_content += delta.content
-                await ws_send({
-                    "type": "agent_token",
-                    "data": {"token": delta.content},
-                })
+                # Read full body for non-SSE responses (error case)
+                content_type = resp.headers.get("content-type", "")
+                if "text/event-stream" not in content_type:
+                    body = await resp.aread()
+                    logger.error("kie.ai returned non-SSE response: %s", body.decode()[:1000])
+                    raise RuntimeError(f"kie.ai API error: {body.decode()[:500]}")
 
-            # Accumulate tool call fragments
-            if delta and delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_calls_by_index:
-                        tool_calls_by_index[idx] = {
-                            "id": tc_delta.id or "",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    entry = tool_calls_by_index[idx]
-                    if tc_delta.id:
-                        entry["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            entry["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            entry["arguments"] += tc_delta.function.arguments
+                # Parse SSE stream
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        logger.warning("Unparseable SSE chunk: %s", data[:200])
+                        continue
+
+                    chunk_count += 1
+                    logger.info("SSE chunk #%d: %s", chunk_count, data)
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta", {})
+                    finish_reason = choice.get("finish_reason") or finish_reason
+
+                    # Stream text tokens to frontend
+                    if delta.get("content"):
+                        text_content += delta["content"]
+                        await ws_send({
+                            "type": "agent_token",
+                            "data": {"token": delta["content"]},
+                        })
+
+                    # Accumulate tool call fragments
+                    for tc_delta in delta.get("tool_calls", []):
+                        idx = tc_delta["index"]
+                        if idx not in tool_calls_by_index:
+                            tool_calls_by_index[idx] = {
+                                "id": tc_delta.get("id", ""),
+                                "name": "",
+                                "arguments": "",
+                            }
+                        entry = tool_calls_by_index[idx]
+                        if tc_delta.get("id"):
+                            entry["id"] = tc_delta["id"]
+                        func = tc_delta.get("function", {})
+                        if func.get("name"):
+                            entry["name"] = func["name"]
+                        if func.get("arguments"):
+                            entry["arguments"] += func["arguments"]
+
+        logger.info(
+            "Stream complete: chunks=%d, text_len=%d, tool_calls=%d, finish=%s",
+            chunk_count, len(text_content), len(tool_calls_by_index), finish_reason,
+        )
+
+        if chunk_count == 0:
+            raise RuntimeError("kie.ai returned an empty SSE stream — no data chunks received.")
 
         # Build the assistant message for conversation history
         assistant_message: dict = {"role": "assistant", "content": text_content or None}

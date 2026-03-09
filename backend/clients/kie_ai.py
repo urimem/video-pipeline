@@ -1,8 +1,6 @@
 import asyncio
 import json
 import logging
-from typing import Any, Optional
-
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -35,6 +33,7 @@ class KieAIClient:
 
     async def create_task(self, model: str, input_params: dict) -> str:
         """Submit a generation job. Returns the taskId."""
+        logger.info(f"Creating task for model: {model} with input params: {input_params}")
         resp = await self._http.post(
             "/api/v1/jobs/createTask",
             json={"model": model, "input": input_params},
@@ -49,7 +48,9 @@ class KieAIClient:
 
     async def poll_task(self, task_id: str) -> dict:
         """Poll until the task reaches a terminal state. Returns the full data dict."""
+        logger.info(f"Polling task: {task_id}")
         for i in range(MAX_POLLS):
+            logger.info(f"Polling task: {task_id} (poll {i+1}/{MAX_POLLS})")
             resp = await self._http.get(
                 "/api/v1/jobs/recordInfo",
                 params={"taskId": task_id},
@@ -73,6 +74,7 @@ class KieAIClient:
 
     def _parse_result_urls(self, data: dict) -> list[str]:
         """Extract result URLs from the recordInfo response data."""
+        logger.info(f"Parsing result URLs from data: {data}")
         result_json_str = data.get("resultJson", "")
         if not result_json_str:
             return []
@@ -101,6 +103,7 @@ class KieAIClient:
         Generate an image via google/nano-banana.
         Returns: {"task_id": str, "url": str}
         """
+        logger.info(f"Generating image with prompt: {prompt}, output format: {output_format}, image size: {image_size}")
         task_id = await self.create_task(
             model="google/nano-banana",
             input_params={
@@ -125,6 +128,11 @@ class KieAIClient:
         Generate a video via kling-3.0/video (image-to-video).
         Returns: {"task_id": str, "video_url": str}
         """
+        logger.info(f"Generating video with prompt: {prompt}, image url: {image_url}, duration: {duration}")
+        # TODO:
+        logger.info("generate_video called but it is blocked")
+        return {"task_id": "generation-blocked", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+
         task_id = await self.create_task(
             model="kling-3.0/video",
             input_params={
