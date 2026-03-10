@@ -12,8 +12,8 @@ from agent.tool_handlers import handle_tool_call
 
 logger = logging.getLogger(__name__)
 
-KIE_BASE_URL = "https://api.kie.ai/gemini-2.5-flash/v1"
-KIE_API_KEY = os.getenv("KIE_API_KEY", "")
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 
 WsSend = Callable[[dict], Awaitable[None]]
@@ -54,12 +54,11 @@ async def run_agent_turn(
 
     while True:
         messages = _build_messages(state)
-        logger.info("Calling kie.ai Gemini API (messages=%d)", len(messages))
+        logger.info("Calling OpenAI API (messages=%d)", len(messages))
 
-        # Raw httpx call so we can inspect the actual response from kie.ai
         payload = {
-            "model": "gemini-2.5-flash",
-            "max_tokens": 4096,
+            "model": "gpt-5.1-chat-latest",
+            "max_completion_tokens": 4096,
             "stream": True,
             "messages": messages,
             "tools": TOOLS,
@@ -80,21 +79,21 @@ async def run_agent_turn(
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
             async with http.stream(
                 "POST",
-                f"{KIE_BASE_URL}/chat/completions",
+                f"{OPENAI_BASE_URL}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {KIE_API_KEY}",
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
             ) as resp:
-                logger.info("kie.ai response: status=%d content_type=%s", resp.status_code, resp.headers.get("content-type", ""))
+                logger.info("OpenAI response: status=%d content_type=%s", resp.status_code, resp.headers.get("content-type", ""))
 
                 # Read full body for non-SSE responses (error case)
                 content_type = resp.headers.get("content-type", "")
                 if "text/event-stream" not in content_type:
                     body = await resp.aread()
-                    logger.error("kie.ai returned non-SSE response: %s", body.decode()[:1000])
-                    raise RuntimeError(f"kie.ai API error: {body.decode()[:500]}")
+                    logger.error("OpenAI returned non-SSE response: %s", body.decode()[:1000])
+                    raise RuntimeError(f"OpenAI API error: {body.decode()[:500]}")
 
                 # Parse SSE stream
                 async for line in resp.aiter_lines():

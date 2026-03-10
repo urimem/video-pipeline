@@ -41,9 +41,11 @@ class KieAIClient:
         resp.raise_for_status()
         body = resp.json()
 
+        logger.info(f"***** CreateTask response: {body}")
         task_id = body.get("data", {}).get("taskId") or body.get("taskId")
         if not task_id:
             raise RuntimeError(f"No taskId in createTask response: {body}")
+        logger.info(f"*****Created task: {task_id}")
         return task_id
 
     async def poll_task(self, task_id: str) -> dict:
@@ -130,17 +132,22 @@ class KieAIClient:
         """
         logger.info(f"Generating video with prompt: {prompt}, image url: {image_url}, duration: {duration}")
         # TODO:
-        logger.info("generate_video called but it is blocked")
-        return {"task_id": "generation-blocked", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+        # logger.info("generate_video called but it is blocked")
+        # return {"task_id": "generation-blocked", "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
 
         task_id = await self.create_task(
             model="kling-3.0/video",
             input_params={
                 "prompt": prompt,
-                "image_url": image_url,
+                "image_urls": [image_url],
                 "duration": str(duration),
+                "mode": "std",
+                "multi_shots": False,
+                "sound": True
             },
         )
+        logger.info(f"Created task: {task_id}")
+
         data = await self.poll_task(task_id)
         urls = self._parse_result_urls(data)
         if not urls:
