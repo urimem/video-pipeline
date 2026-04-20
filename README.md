@@ -1,6 +1,7 @@
   # Video Pipeline
 
   A two-tier web application for video content creation using AI tools with real-time collaboration capabilities.
+  Using google/nano-banana to generate images, kling-3.0/video for video generation and gemini-2.5-flash for chat orchestrator agent.
 
   ## Architecture
 
