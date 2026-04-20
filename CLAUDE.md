@@ -3,7 +3,7 @@
 ## Architecture
 
 Two-tier web application:
-- **Backend**: Python 3.11+ / FastAPI / WebSockets / OpenAI SDK (pointed at kie.ai)
+- **Backend**: Python 3.13 / FastAPI / WebSockets / OpenAI SDK
 - **Frontend**: React 18 / Vite / TypeScript / Zustand
 
 ## Running the App
@@ -19,7 +19,9 @@ cd frontend
 npm run dev   # http://localhost:5173
 ```
 
-Copy `.env.example` → `.env` and fill in `KIE_API_KEY` (single key for all kie.ai services).
+Copy `.env.example` → `.env` (project root) and fill in both keys:
+- `KIE_API_KEY` — kie.ai key for image and video generation
+- `OPENAI_API_KEY` — OpenAI key for the chat agent (gpt-5.1-chat-latest)
 
 ## Backend Structure
 
@@ -50,7 +52,7 @@ frontend/src/
 
 ## Agent Design
 
-Gemini 2.5 Flash via kie.ai (OpenAI-compatible API) with function calling. 4 tools:
+`gpt-5.1-chat-latest` via OpenAI API (`https://api.openai.com/v1`) with function calling. 4 tools:
 - `update_script` — saves script artifact
 - `generate_image` — calls google/nano-banana via kie.ai, emits pending+ready WS events
 - `generate_video` — calls kling-3.0/video (image-to-video) via kie.ai, emits pending+ready WS events
@@ -58,12 +60,11 @@ Gemini 2.5 Flash via kie.ai (OpenAI-compatible API) with function calling. 4 too
 
 The agentic loop in `agent/agent.py` handles streaming text tokens (forwarded to WS as `agent_token`), accumulates tool call fragments across chunks, then executes tools iteratively until `finish_reason != "tool_calls"`.
 
-Dynamic system prompt injection on every API call via `developer` role message: includes current `pipeline_step` and artifact state to prevent the model from skipping steps.
+Dynamic system prompt injection on every API call via `system` role message: includes current `pipeline_step` and artifact state to prevent the model from skipping steps.
 
 ## kie.ai API Integration
 
-All services use a single `KIE_API_KEY`. The unified client in `clients/kie_ai.py` handles:
-- **Chat (Gemini 2.5 Flash)**: `POST /gemini-2.5-flash/v1/chat/completions` — OpenAI-compatible, used via the OpenAI Python SDK with custom `base_url`
+`KIE_API_KEY` is used only for image and video generation (chat uses OpenAI directly). The unified client in `clients/kie_ai.py` handles:
 - **Image gen (google/nano-banana)**: `POST /api/v1/jobs/createTask` → poll `GET /api/v1/jobs/recordInfo`
 - **Video gen (kling-3.0/video)**: Same createTask/recordInfo pattern, but image-to-video (requires `image_url` input)
 

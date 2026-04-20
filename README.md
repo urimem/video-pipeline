@@ -1,125 +1,109 @@
-  # Video Pipeline
+# Video Pipeline
 
-  A two-tier web application for video content creation using AI tools with real-time collaboration capabilities.
-  Using google/nano-banana to generate images, kling-3.0/video for video generation and gemini-2.5-flash for chat orchestrator agent.
+A two-tier web application for AI-assisted video content creation.
+Uses OpenAI GPT as the chat orchestrator, google/nano-banana for image generation, and kling-3.0/video for video generation — all coordinated via kie.ai.
 
-  ## Architecture
+## Architecture
 
-  The application consists of:
-  - **Backend**: Python 3.11+ / FastAPI / WebSockets / OpenAI SDK (pointed at kie.ai)
-  - **Frontend**: React 18 / Vite / TypeScript / Zustand
+- **Backend**: Python 3.13 / FastAPI / WebSockets / OpenAI SDK
+- **Frontend**: React 18 / Vite / TypeScript / Zustand
 
-  ## Features
+## Features
 
-  - Real-time collaborative video creation
-  - AI-powered script generation, image generation, and video synthesis
-  - WebSocket-based communication for real-time updates
-  - Pipeline step management with artifact tracking
-  - Responsive web interface with real-time feedback
+- AI-powered script generation, image generation, and video synthesis
+- Real-time WebSocket communication with streaming token output
+- 3-step guided pipeline: Script → Images → Video
+- Artifact panel tracking each pipeline artifact in real time
 
-  ## Running the App
+## Prerequisites
 
-  ### Prerequisites
+1. Python 3.13+
+2. Node.js 18+
+3. A kie.ai API key (`KIE_API_KEY`) — for image and video generation
+4. An OpenAI API key (`OPENAI_API_KEY`) — for the chat agent
 
-  1. Python 3.11+
-  2. Node.js 18+
-  3. A kie.ai API key (single key for all kie.ai services)
+Copy `.env.example` → `.env` (project root) and fill in both keys:
 
-  ### Backend Setup
+```bash
+cp .env.example .env
+# Edit .env: set KIE_API_KEY and OPENAI_API_KEY
+```
 
-  ```bash
-  cd backend
-  source .venv/bin/activate
-  pip install -r requirements.txt
+## Running the App
 
-  Copy .env.example → .env and fill in KIE_API_KEY:
+```bash
+# Backend
+cd backend
+source .venv/bin/activate
+uvicorn main:app --reload --port 8000
 
-  cp .env.example .env
-  # Edit .env to add your KIE_API_KEY
+# Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev   # http://localhost:5173
+```
 
-  Start the backend server:
+## Backend Structure
 
-  uvicorn main:app --reload --port 8000
-  ```
-  ### Frontend Setup
-  ```bash
-  cd frontend
-  npm install
-  npm run dev   # http://localhost:5173
-  ```
+```
+backend/
+  main.py              # FastAPI app + CORS; loads .env
+  api/routes.py        # POST /session, DELETE /session/{id}, GET /health
+  api/websocket.py     # WS /ws/{session_id} — dispatches to agent
+  agent/agent.py       # GPT streaming + agentic tool loop (core logic)
+  agent/tools.py       # Tool JSON schemas (OpenAI function-calling format)
+  agent/system_prompt.py # 3-step pipeline instructions injected each turn
+  agent/tool_handlers.py # Tool dispatch → kie.ai client + artifact WS updates
+  session/state.py     # SessionState Pydantic model + in-memory sessions dict
+  clients/kie_ai.py    # Unified kie.ai client (image gen + video gen)
+```
 
-  ## Backend Structure
-  ```
-  backend/
-    main.py              # FastAPI app + CORS; loads .env
-    api/routes.py        # POST /session, DELETE /session/{id}, GET /health
-    api/websocket.py     # WS /ws/{session_id} — dispatches to agent
-    agent/agent.py       # Gemini 2.5 Flash streaming + agentic tool loop (core logic)
-    agent/tools.py       # Tool JSON schemas (OpenAI function-calling format)
-    agent/system_prompt.py # 3-step pipeline instructions injected each turn
-    agent/tool_handlers.py # Tool dispatch → kie.ai client + artifact WS updates
-    session/state.py     # SessionState Pydantic model + in-memory sessions dict
-    clients/kie_ai.py    # Unified kie.ai client (image gen + video gen)
-  ```
-  ## Frontend Structure
-  ```
-  frontend/src/
-    types.ts             # All WS message types + domain types
-    store/sessionStore.ts # Zustand store (single source of truth)
-    hooks/useWebSocket.ts # WS connection + message dispatcher
-    components/layout/   # TwoPanel, PipelineBar
-    components/chat/     # ChatPanel, ChatMessage, ChatInput
-    components/artifacts/ # ArtifactPanel, ScriptArtifact, ImagesArtifact, VideoArtifact
-  ```
+## Frontend Structure
 
-  ## Agent Design
+```
+frontend/src/
+  types.ts             # All WS message types + domain types
+  store/sessionStore.ts # Zustand store (single source of truth)
+  hooks/useWebSocket.ts # WS connection + message dispatcher
+  components/layout/   # TwoPanel, PipelineBar
+  components/chat/     # ChatPanel, ChatMessage, ChatInput
+  components/artifacts/ # ArtifactPanel, ScriptArtifact, ImagesArtifact, VideoArtifact
+```
 
-  The agent uses Gemini 2.5 Flash via kie.ai (OpenAI-compatible API) with function calling and four tools:
+## Agent Design
 
-  1. update_script — saves script artifact
-  2. generate_image — calls google/nano-banana via kie.ai, emits pending+ready WS events
-  3. generate_video — calls kling-3.0/video (image-to-video) via kie.ai, emits pending+ready WS events
-  4. update_pipeline_step — advances pipeline state, emits WS event
+`gpt-5.1-chat-latest` via OpenAI API with function calling. 4 tools:
 
-  The agentic loop in agent/agent.py handles streaming text tokens (forwarded to WS as agent_token), accumulates tool call fragments across chunks, then executes tools
-  iteratively until finish_reason != "tool_calls".
+1. `update_script` — saves script artifact
+2. `generate_image` — calls google/nano-banana via kie.ai, emits pending+ready WS events
+3. `generate_video` — calls kling-3.0/video (image-to-video) via kie.ai, emits pending+ready WS events
+4. `update_pipeline_step` — advances pipeline state, emits WS event
 
-  Dynamic system prompt injection on every API call via developer role message: includes current pipeline_step and artifact state to prevent the model from skipping
-  steps.
+The agentic loop in `agent/agent.py` handles streaming text tokens (forwarded to WS as `agent_token`), accumulates tool call fragments across chunks, then executes tools iteratively until `finish_reason != "tool_calls"`.
 
-  ### kie.ai API Integration
+Dynamic system prompt injection on every API call via `system` role message: includes current `pipeline_step` and artifact state to prevent the model from skipping steps.
 
-  All services use a single KIE_API_KEY. The unified client in clients/kie_ai.py handles:
+### kie.ai API Integration
 
-  - Chat (Gemini 2.5 Flash): POST /gemini-2.5-flash/v1/chat/completions — OpenAI-compatible, used via the OpenAI Python SDK with custom base_url
-  - Image gen (google/nano-banana): POST /api/v1/jobs/createTask → poll GET /api/v1/jobs/recordInfo
-  - Video gen (kling-3.0/video): Same createTask/recordInfo pattern, but image-to-video (requires image_url input)
+`KIE_API_KEY` is used exclusively for image and video generation. The unified client in `clients/kie_ai.py` handles:
 
-  ### WebSocket Protocol
+- **Image gen (google/nano-banana)**: `POST /api/v1/jobs/createTask` → poll `GET /api/v1/jobs/recordInfo`
+- **Video gen (kling-3.0/video)**: Same createTask/recordInfo pattern, image-to-video (requires `image_url` input)
 
-  All frames: { "type": "<type>", "data": { ... } }
+### WebSocket Protocol
 
-  Server→Client:
-  - session_init
-  - agent_token
-  - agent_turn_complete
-  - tool_use
-  - artifact_update
-  - pipeline_step_update
-  - error
-  - pong
+All frames: `{ "type": "<type>", "data": { ... } }`
 
-  Client→Server:
-  - user_message
-  - ping
+Server→Client: `session_init`, `agent_token`, `agent_turn_complete`, `tool_use`, `artifact_update`, `pipeline_step_update`, `error`, `pong`
+Client→Server: `user_message`, `ping`
 
-  ## Known Limitations
+## Known Limitations
 
-  - In-memory session store — lost on server restart (easy to replace with Redis)
-  - Full conversation history re-sent to Gemini each turn — may hit context limits for very long sessions
-  - Images generated sequentially (one tool call per image)
-  - Pipeline step ordering enforced via system prompt, not backend validation
+- In-memory session store — lost on server restart (easy to replace with Redis)
+- Full conversation history re-sent to GPT each turn — may hit context limits for very long sessions
+- Images generated sequentially (one tool call per image)
+- Pipeline step ordering enforced via system prompt, not backend validation
 
-  ## License
+## License
 
-  This project is licensed under the MIT License.
+MIT
