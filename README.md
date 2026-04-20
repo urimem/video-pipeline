@@ -3,6 +3,20 @@
 A two-tier web application for AI-assisted video content creation.
 Uses OpenAI GPT as the chat orchestrator, google/nano-banana for image generation, and kling-3.0/video for video generation — all coordinated via kie.ai.
 
+## How to Use
+
+Once the app is running, open `http://localhost:5173` in your browser. You'll see a two-panel layout: a chat window on the left and an artifact panel on the right.
+
+The AI guides you through three steps:
+
+1. **Script** — Describe your video idea in the chat. The AI will ask clarifying questions and collaboratively write a script with you. When you're happy with it, the script appears in the artifact panel.
+2. **Images** — The AI analyses the script and generates two images automatically: a character portrait and an opening scene frame. You can see them appear in real time as they render.
+3. **Video** — The AI picks the best image as the starting frame and generates a short video clip from it. Once ready, the video is embedded directly in the artifact panel.
+
+The pipeline bar at the top shows your current step. You don't need to manage any of it manually — just chat naturally.
+
+![Video Pipeline UI](docs/video-pipeline-ui.jpg)
+
 ## Architecture
 
 - **Backend**: Python 3.13 / FastAPI / WebSockets / OpenAI SDK
